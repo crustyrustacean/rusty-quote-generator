@@ -1,0 +1,4 @@
+# Rusty Quote Generator - Trunk.toml configuration
+
+[build]
+dist = "../public"

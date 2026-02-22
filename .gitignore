@@ -1,0 +1,5 @@
+# gitignore configuration for rusty-quote-generator
+
+# build artifacts
+/public
+/target

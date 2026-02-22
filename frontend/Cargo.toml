@@ -1,0 +1,24 @@
+[package]
+name = "rusty-quote-generator-client"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "rqg-client"
+path = "src/bin/main.rs"
+
+[lib]
+name = "rusty_quote_generator_client"
+path = "src/lib.rs"
+
+[dependencies]
+console_error_panic_hook = "0.1.7"
+gloo-net = "0.6.0"
+js-sys = "0.3.88"
+log = "0.4.29"
+serde = { version = "1.0.228", features = ["derive"] }
+wasm-bindgen = "0.2.108"
+wasm-bindgen-futures = "0.4.58"
+wasm-logger = "0.2.0"
+web-sys = { version = "0.3", features = [ "Window"] }
+yew = { version = "0.22.0", features = ["csr", "serde"] }
