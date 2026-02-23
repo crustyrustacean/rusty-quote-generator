@@ -42,7 +42,11 @@ async fn run(listener: TcpListener, base_url: String) -> Result<Server, anyhow::
     let server = HttpServer::new(move || {
         App::new()
             .route("/health_check", web::get().to(health_check))
-            .service(Files::new("/", "../public").index_file("index.html").prefer_utf8(true))
+            .service(
+                Files::new("/", "../public")
+                    .index_file("index.html")
+                    .prefer_utf8(true),
+            )
             .app_data(base_url.clone())
     })
     .listen(listener)?

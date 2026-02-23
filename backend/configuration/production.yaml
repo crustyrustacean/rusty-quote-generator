@@ -1,2 +1,5 @@
+# configuration/production.yaml
+# production specific deployment configuration
 application:
   host: 0.0.0.0
+  port: 8080 # fly.io wants 8080 for the port

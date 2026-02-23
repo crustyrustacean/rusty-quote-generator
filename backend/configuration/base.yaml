@@ -1,3 +1,5 @@
+# configuration/base.yaml
+# base line configuration, regardless of deployment location
 application:
   port: 8000
   host: 0.0.0.0

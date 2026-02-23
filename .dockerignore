@@ -1,0 +1,6 @@
+# dockerignore configuration for rusty-quote-generator
+
+.env
+/public
+/target
+Dockerfile

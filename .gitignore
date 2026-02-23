@@ -1,5 +1,8 @@
 # gitignore configuration for rusty-quote-generator
 
+# environment variables
+.env
+
 # build artifacts
 /public
 /target
