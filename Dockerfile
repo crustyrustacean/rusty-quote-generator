@@ -9,13 +9,12 @@ FROM chef AS planner
 
 COPY Cargo.toml Cargo.lock ./
 COPY backend ./backend
-COPY common ./common
 COPY frontend ./frontend
 
 RUN cargo chef prepare --recipe-path recipe.json
 
 # Stage 3: Build frontend with Trunk
-FROM rust:1.93 AS frontend-builder
+FROM rust:1.93.1 AS frontend-builder
 
 RUN cargo install trunk
 RUN rustup target add wasm32-unknown-unknown
@@ -34,10 +33,8 @@ FROM chef AS backend-builder
 
 COPY --from=planner /app/recipe.json recipe.json
 
-# Build dependencies - this layer is cached
 RUN cargo chef cook --release --recipe-path recipe.json
 
-# Copy source and build
 COPY Cargo.toml Cargo.lock ./
 COPY backend ./backend
 COPY frontend ./frontend
@@ -54,7 +51,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY --from=backend-builder /app/target/release/rusty-quote-generator-server /app/server
+COPY --from=backend-builder /app/target/release/rqg-server /app/server
 COPY --from=frontend-builder /app/public /app/public
 COPY backend/configuration /app/configuration
 
