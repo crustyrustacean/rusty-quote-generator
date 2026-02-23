@@ -22,7 +22,7 @@ impl Application {
         );
         let listener = TcpListener::bind(address)?;
         let port = listener.local_addr()?.port();
-        let server = run(listener, configuration.application.base_url).await?;
+        let server = run(listener, configuration.application.base_url, configuration.application.public_dir).await?;
         Ok(Self { port, server })
     }
 
@@ -38,14 +38,14 @@ impl Application {
 
 pub struct ApplicationBaseUrl(pub String);
 
-async fn run(listener: TcpListener, base_url: String) -> Result<Server, anyhow::Error> {
+async fn run(listener: TcpListener, base_url: String, public_dir: String) -> Result<Server, anyhow::Error> {
     let base_url = Data::new(ApplicationBaseUrl(base_url));
     let server = HttpServer::new(move || {
         App::new()
             .wrap(TracingLogger::default())
             .route("/health_check", web::get().to(health_check))
             .service(
-                Files::new("/", "../public")
+                Files::new("/", &public_dir)
                     .index_file("index.html")
                     .prefer_utf8(true),
             )

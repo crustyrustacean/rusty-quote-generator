@@ -801,47 +801,68 @@ With it wired in, all HTTP traffic now produces structured, correlated log outpu
 ### Multi-Stage Build Anatomy
 
 ```dockerfile
-# Stage 1: chef — installs cargo-chef for dependency caching
+# Stage 1: Chef - prepare recipe
 FROM rust:1.93.1 AS chef
+
 RUN cargo install cargo-chef
 WORKDIR /app
 
-# Stage 2: planner — generates dependency manifest
+# Stage 2: Planner - create recipe.json
 FROM chef AS planner
-COPY . .
+
+COPY Cargo.toml Cargo.lock ./
+COPY backend ./backend
+COPY frontend ./frontend
+
 RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 3: frontend-builder — builds Yew WASM
-FROM rust:1.93 AS frontend-builder      # ← version inconsistency (1.93 vs 1.93.1)
-RUN rustup target add wasm32-unknown-unknown
+# Stage 3: Build frontend with Trunk
+FROM rust:1.93.1 AS frontend-builder
+
 RUN cargo install trunk
+RUN rustup target add wasm32-unknown-unknown
+
 WORKDIR /app
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json  # pre-build deps
-COPY . .
+
+COPY Cargo.toml Cargo.lock ./
+COPY frontend ./frontend
+COPY backend ./backend
+
 WORKDIR /app/frontend
 RUN trunk build --release
 
-# Stage 4: backend-builder — builds Actix server binary
+# Stage 4: Build backend with cached dependencies
 FROM chef AS backend-builder
-WORKDIR /app
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json  # pre-build deps (cached)
-COPY . .
-RUN cargo build --release --bin rqg-server
 
-# Stage 5: runtime — minimal production image
+COPY --from=planner /app/recipe.json recipe.json
+
+RUN cargo chef cook --release --recipe-path recipe.json
+
+COPY Cargo.toml Cargo.lock ./
+COPY backend ./backend
+COPY frontend ./frontend
+
+WORKDIR /app/backend
+RUN cargo build --release
+
+# Stage 5: Runtime
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update -y \
-    && apt-get install -y --no-install-recommends openssl ca-certificates \
-    && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY --from=backend-builder /app/target/release/rqg-server /usr/local/bin/
-COPY --from=frontend-builder /app/public ./public
-COPY backend/configuration ./backend/configuration
+
+COPY --from=backend-builder /app/target/release/rqg-server /app/server
+COPY --from=frontend-builder /app/public /app/public
+COPY backend/configuration /app/configuration
+
 ENV APP_ENVIRONMENT=production
+
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/rqg-server"]
+
+CMD ["./server"]
 ```
 
 ### `cargo-chef` — How Dependency Caching Works
@@ -857,11 +878,9 @@ Since dependency compilation often takes 5-15x longer than application compilati
 
 ### Notable Dockerfile Issues
 
-**1. Rust version inconsistency:**
-- `chef` stage: `rust:1.93.1`
-- `frontend-builder` stage: `rust:1.93`
+**1. Rust version inconsistency — ✅ FIXED**
 
-Docker pulls these as two different image layers, wasting disk space and potentially introducing subtle toolchain differences. Both should be `rust:1.93.1` (or better, a specific digest for reproducibility).
+Both `chef`/`backend-builder` and `frontend-builder` now use `rust:1.93.1`.
 
 **2. No non-root user:**
 The runtime image runs as root (the default for Docker). This violates the principle of least privilege. If the server process were compromised, the attacker would have root access to the container. Adding a non-root user:
@@ -871,15 +890,13 @@ RUN useradd -r -u 1000 appuser
 USER appuser
 ```
 
-**3. WORKDIR in runtime vs. configuration path:**
-The runtime image has `WORKDIR /app`, and the configuration is copied to `./backend/configuration` (resolving to `/app/backend/configuration`). The binary runs with `WORKDIR /app`, so `get_configuration()` resolves `current_dir()` to `/app` and looks for `configuration/base.yaml` at `/app/configuration/base.yaml` — which doesn't exist! The configs are at `/app/backend/configuration/`.
+**3. Binary name mismatch — ✅ FIXED**
 
-This is a potential startup panic in Docker. The correct fix is either:
-- Set `WORKDIR /app/backend` (so `current_dir()` finds `configuration/` correctly)
-- Or adjust the `get_configuration()` path resolution to be robust to the working directory
+The Dockerfile previously copied `rusty-quote-generator-server` but the `[[bin]] name` in `backend/Cargo.toml` is `rqg-server`. Now correctly copies `rqg-server`.
 
-**4. Binary name:**
-The Dockerfile copies `/app/target/release/rqg-server`. The binary name `rqg-server` must match the `[[bin]] name` in `backend/Cargo.toml`. If the Cargo.toml binary name were changed, the Dockerfile copy would silently fail (the file wouldn't exist) and the `ENTRYPOINT` would fail with "No such file or directory."
+**4. Spurious `common` crate reference — ✅ FIXED**
+
+The planner stage previously included `COPY common ./common` for a crate that doesn't exist in this project. Removed.
 
 ---
 
@@ -887,15 +904,13 @@ The Dockerfile copies `/app/target/release/rqg-server`. The binary name `rqg-ser
 
 ### Bugs
 
-**Bug B-1 — WORKDIR Mismatch in Docker (Critical)**
+**Bug B-1 — WORKDIR / Binary Name / common crate — ✅ FIXED**
 
-The runtime stage uses `WORKDIR /app`, but the binary's `get_configuration()` uses `std::env::current_dir()` and looks for `configuration/base.yaml`. With `WORKDIR /app`, it would look in `/app/configuration/`, but the Dockerfile copies configs to `/app/backend/configuration/`. The server panics at startup in Docker.
-
-**Fix:** Change the runtime `WORKDIR` to `/app/backend`:
-```dockerfile
-WORKDIR /app/backend
-ENTRYPOINT ["/usr/local/bin/rqg-server"]
-```
+Three related Dockerfile issues resolved:
+- Binary name corrected from `rusty-quote-generator-server` to `rqg-server`
+- Configuration is now copied to `/app/configuration`, matching what `get_configuration()` looks for with `WORKDIR /app`
+- Spurious `COPY common ./common` removed (no `common` crate in this project)
+- Rust version pinned to `rust:1.93.1` across all stages
 
 **Bug B-2 — `base_url` not in `base.yaml` (High)**
 
@@ -914,13 +929,7 @@ application:
 pub base_url: Option<String>,
 ```
 
-**Bug B-3 — Rust Version Inconsistency in Dockerfile (Low)**
-
-`chef` uses `rust:1.93.1`, `frontend-builder` uses `rust:1.93`. These are different images. Fix by pinning both to `rust:1.93.1`.
-
-### Gaps (Functional Omissions)
-
-**Gap G-1 — `tracing-actix-web` Middleware Not Wired — ✅ FIXED**
+**Gap G-1 — `tracing-actix-web` Middleware — ✅ FIXED**
 
 This was an oversight that has since been corrected. `TracingLogger::default()` is now wired into the `App` builder in `startup.rs`, and the corresponding import added. Structured per-request logs (method, path, status code, elapsed time, request ID) are now emitted for all HTTP traffic.
 
@@ -947,9 +956,9 @@ Files::new("/", "../public")
 
 Runtime container runs as root. Should add a non-root user.
 
-**Gap G-4 — No Request Logging (Observability)**
+**Gap G-4 — No Handler-Level Instrumentation (Low)**
 
-Even after fixing G-1, individual route handlers have no `#[tracing::instrument]` attributes. The `health_check` handler is trivial, but any future handler should be instrumented.
+Individual route handlers have no `#[tracing::instrument]` attributes. The `health_check` handler is trivial, but any future handler should be annotated so its internal logic produces correlated child spans.
 
 **Gap G-5 — `anyhow` Unused (Minor)**
 
@@ -1059,4 +1068,4 @@ The backend demonstrates mature patterns for a learning project. The library/bin
 
 ### Weaknesses
 
-The critical operational gap is the WORKDIR mismatch — the server almost certainly panics in Docker as configured. The missing `base_url` in `base.yaml` is a startup-time landmine in minimal environments. The `tracing-actix-web` middleware being declared but not wired means the backend is effectively invisible in production logs. The Docker non-root omission is a security gap that's easily fixed. The integration test suite is thin — one test covering one endpoint — which is appropriate for the current feature set but will need to grow as routes are added.
+The missing `base_url` in `base.yaml` is a startup-time landmine in minimal environments. The Docker non-root omission is a security gap that's easily fixed. The integration test suite is thin — one test covering one endpoint — which is appropriate for the current feature set but will need to grow as routes are added.
