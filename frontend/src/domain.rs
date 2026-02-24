@@ -8,5 +8,5 @@ use yew::AttrValue;
 pub struct Quote {
     pub text: AttrValue,
     pub author: AttrValue,
-    pub tag: Option<AttrValue>,
+    pub tag: AttrValue,
 }
